@@ -73,14 +73,14 @@ RUN mkdir data && \
 
 # Limit file descriptors used by uwsgi, see https://github.com/sissbruecker/linkding/issues/453
 ENV UWSGI_MAX_FD=4096
-# Expose uwsgi server at port 9090
-EXPOSE 9090
+# Expose uwsgi server at port 80
+EXPOSE 80
 # Allow running containers as an an arbitrary user in the root group, to support deployment scenarios like OpenShift, Podman
 RUN chmod g+w . && \
     chmod +x ./bootstrap.sh
 
 HEALTHCHECK --interval=30s --retries=3 --timeout=1s \
-CMD curl -f http://localhost:${LD_SERVER_PORT:-9090}/${LD_CONTEXT_PATH}health || exit 1
+CMD curl -f http://localhost:${LD_SERVER_PORT:-80}/${LD_CONTEXT_PATH}up || exit 1
 
 CMD ["./bootstrap.sh"]
 

@@ -2,7 +2,7 @@
 # Bootstrap script that gets executed in new Docker containers
 
 LD_SERVER_HOST="${LD_SERVER_HOST:-[::]}"
-LD_SERVER_PORT="${LD_SERVER_PORT:-9090}"
+LD_SERVER_PORT="${LD_SERVER_PORT:-80}"
 
 # Create data folder if it does not exist
 mkdir -p data
