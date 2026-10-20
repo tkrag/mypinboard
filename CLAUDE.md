@@ -15,9 +15,11 @@ All our modifications are small and confined to specific locations. Knowing exac
 |---|---|---|
 | Added `/up` health route | `bookmarks/urls.py` (next to `health`) | Once requires `GET /up → 200` |
 | Changed default port 9090 → 80 | `bootstrap.sh` line 5 | Once serves on port 80 |
+| Link `data/` to `/storage` when it exists | `bootstrap.sh` (top) | Once only persists `/storage`; without this all data lives in the container and is lost on every update |
+| `chown` of `data/` uses a trailing slash | `bootstrap.sh` | So it follows the `/storage` symlink |
 | Changed `EXPOSE` 9090 → 80 | `docker/alpine.Dockerfile` | Once serves on port 80 |
 | Changed healthcheck to use `/up` | `docker/alpine.Dockerfile` HEALTHCHECK | Matches our `/up` route |
-| Added `docker-compose.once.yml` | repo root | Once deployment config (mounts `/storage`) |
+| Added `docker-compose.once.yml` | repo root | For running with plain Docker Compose. **Once ignores this file.** |
 | Added `.github/workflows/docker.yml` | `.github/workflows/` | CI: builds and pushes to `ghcr.io/tkrag/mypinboard:latest` |
 | Added `CLAUDE.md` | repo root | This file |
 
@@ -76,7 +78,7 @@ git apply --3way /tmp/once.patch       # re-apply our port/healthcheck/route edi
 git diff --cached --stat vNEW          # must list only the files in the table above
 ```
 
-If `git apply --3way` reports conflicts, resolve them keeping: `LD_SERVER_PORT` default `80` in `bootstrap.sh`; `EXPOSE 80` and the `/up` HEALTHCHECK in the Dockerfile; the `path("up", ...)` line in `bookmarks/urls.py`.
+If `git apply --3way` reports conflicts, resolve them keeping: `LD_SERVER_PORT` default `80` and the `/storage` link block in `bootstrap.sh`; `EXPOSE 80` and the `/up` HEALTHCHECK in the Dockerfile; the `path("up", ...)` line in `bookmarks/urls.py`.
 
 Note: Nextcloud sync can strip executable bits from the working copy. Before committing, check `git ls-files -s bootstrap.sh` shows `100755`.
 
@@ -115,3 +117,4 @@ curl http://localhost:8080/up   # must return 200
 - Do not update just because a release exists — only for security fixes and wanted features
 - Do not change the default port back to 9090 — Once requires port 80
 - Do not remove the `/up` route — Once health-checks on that path
+- Do not remove the `/storage` link in `bootstrap.sh` — Once persists and backs up only `/storage`; anything else is wiped when the container is replaced

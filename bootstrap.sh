@@ -4,6 +4,16 @@
 LD_SERVER_HOST="${LD_SERVER_HOST:-[::]}"
 LD_SERVER_PORT="${LD_SERVER_PORT:-80}"
 
+# Once only persists /storage, so keep the data folder there (Once deployment compatibility)
+# rmdir only removes the empty data folder from the image, never existing data
+if [ -d /storage ] && [ ! -L data ]; then
+  if rmdir data 2>/dev/null || [ ! -e data ]; then
+    ln -s /storage data
+  else
+    echo "WARNING: /storage exists but data/ is not empty, not linking data to /storage" >&2
+  fi
+fi
+
 # Create data folder if it does not exist
 mkdir -p data
 # Create favicon folder if it does not exist
@@ -25,7 +35,7 @@ python manage.py create_initial_superuser
 python manage.py migrate_tasks
 
 # Ensure folders are owned by the right user
-chown -R www-data: /etc/linkding/data
+chown -R www-data: /etc/linkding/data/
 
 # Start processes
 # Experimental: use supervisor to manage all processes, enables logging background tasks to stdout/stderr
