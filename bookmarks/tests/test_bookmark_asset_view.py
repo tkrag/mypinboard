@@ -1,5 +1,7 @@
+import base64
 import os
 
+from bs4 import BeautifulSoup
 from django.conf import settings
 from django.test import TestCase
 from django.urls import reverse
@@ -14,14 +16,14 @@ class BookmarkAssetViewTestCase(TestCase, BookmarkFactoryMixin):
         user = self.get_or_create_test_user()
         self.client.force_login(user)
 
-    def setup_asset_file(self, filename):
+    def write_asset_file(self, filename):
         filepath = os.path.join(settings.LD_ASSET_FOLDER, filename)
         with open(filepath, "w") as f:
             f.write("test")
 
     def setup_asset_with_file(self, bookmark):
         filename = f"temp_{bookmark.id}.html.gzip"
-        self.setup_asset_file(filename)
+        self.write_asset_file(filename)
         asset = self.setup_asset(
             bookmark=bookmark, file=filename, display_name=f"Snapshot {bookmark.id}"
         )
@@ -29,7 +31,7 @@ class BookmarkAssetViewTestCase(TestCase, BookmarkFactoryMixin):
 
     def setup_asset_with_uploaded_file(self, bookmark, content_type="image/png"):
         filename = f"temp_{bookmark.id}.png.gzip"
-        self.setup_asset_file(filename)
+        self.write_asset_file(filename)
         asset = self.setup_asset(
             bookmark=bookmark,
             file=filename,
@@ -152,6 +154,101 @@ class BookmarkAssetViewTestCase(TestCase, BookmarkFactoryMixin):
             f'inline; filename="{asset.display_name}.html"',
         )
         self.assertEqual(response["Content-Security-Policy"], "sandbox allow-scripts")
+
+    def test_view_streams_file_content(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset(bookmark=bookmark, file=f"temp_{bookmark.id}.html")
+        content = "<html>" + "x" * 100000 + "</html>"
+        self.setup_asset_file(asset, content)
+
+        response = self.client.get(reverse("linkding:assets.view", args=[asset.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.streaming)
+        self.assertEqual(b"".join(response.streaming_content), content.encode())
+
+    def test_view_streams_gzipped_file_content(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset(
+            bookmark=bookmark, file=f"temp_{bookmark.id}.html.gz", gzip=True
+        )
+        content = "<html>" + "x" * 100000 + "</html>"
+        self.setup_asset_file(asset, content)
+
+        response = self.client.get(reverse("linkding:assets.view", args=[asset.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.streaming)
+        self.assertEqual(b"".join(response.streaming_content), content.encode())
+
+    def test_view_missing_file(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset(bookmark=bookmark, file="does_not_exist.html")
+
+        response = self.client.get(reverse("linkding:assets.view", args=[asset.id]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_reader_view_gzipped_file_content(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset(
+            bookmark=bookmark, file=f"temp_{bookmark.id}.html.gz", gzip=True
+        )
+        self.setup_asset_file(asset, "<p>gzipped content</p>")
+
+        response = self.client.get(reverse("linkding:assets.read", args=[asset.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<p>gzipped content</p>", response.content.decode())
+
+    def test_reader_view_headers(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset_with_file(bookmark)
+        response = self.client.get(reverse("linkding:assets.read", args=[asset.id]))
+
+        self.assertEqual(response["Content-Security-Policy"], "sandbox allow-scripts")
+
+    def test_reader_view_without_custom_css(self):
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset_with_file(bookmark)
+        response = self.client.get(reverse("linkding:assets.read", args=[asset.id]))
+
+        soup = BeautifulSoup(response.content, "html.parser")
+        link = soup.select_one("link[rel='stylesheet'][href^='data:text/css']")
+        self.assertIsNone(link)
+
+    def test_reader_view_with_custom_css(self):
+        # The reader view is sandboxed, so requests to the custom CSS view
+        # would not include credentials. Custom CSS is embedded as data URL instead.
+        css = "body { background-color: red; }"
+        profile = self.get_or_create_test_user().profile
+        profile.custom_css = css
+        profile.save()
+
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset_with_file(bookmark)
+        response = self.client.get(reverse("linkding:assets.read", args=[asset.id]))
+
+        soup = BeautifulSoup(response.content, "html.parser")
+        link = soup.select_one("link[rel='stylesheet'][href^='data:text/css']")
+        self.assertIsNotNone(link)
+        encoded = base64.b64encode(css.encode("utf-8")).decode("ascii")
+        self.assertEqual(link["href"], f"data:text/css;charset=utf-8;base64,{encoded}")
+        self.assertNotIn(reverse("linkding:custom_css"), response.content.decode())
+
+    def test_reader_view_custom_css_can_not_inject_html(self):
+        css = "</style><script>alert('xss')</script><style>"
+        profile = self.get_or_create_test_user().profile
+        profile.custom_css = css
+        profile.save()
+
+        bookmark = self.setup_bookmark()
+        asset = self.setup_asset_with_file(bookmark)
+        response = self.client.get(reverse("linkding:assets.read", args=[asset.id]))
+
+        html = response.content.decode()
+        self.assertNotIn("alert('xss')", html)
+        self.assertNotIn("</style>", html)
 
     def test_uploaded_file_download_headers(self):
         bookmark = self.setup_bookmark()

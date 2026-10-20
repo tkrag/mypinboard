@@ -2,23 +2,26 @@
 
 A fork of [linkding](https://github.com/sissbruecker/linkding) adapted for deployment on [Once (Hetzner)](https://once.com/).
 
-**Forked from:** linkding v1.45.0 (2026-01-06)  
+**Based on:** linkding v1.47.0 (2026-09-13)  
 **Live URL:** configured via Once TUI
 
 ---
 
 ## Our changes vs upstream
 
-All our modifications are small and confined to specific locations. Knowing exactly what we changed is critical for safe merging.
+All our modifications are small and confined to specific locations. Knowing exactly what we changed is critical for safe upgrades.
 
 | What | Where | Why |
 |---|---|---|
-| Added `/up` health route | `bookmarks/urls.py` line 112 | Once requires `GET /up → 200` |
-| Changed default port 9090 → 80 | `bootstrap.sh` line 4 | Once serves on port 80 |
-| Changed `EXPOSE` 9090 → 80 | `docker/alpine.Dockerfile` line ~75 | Once serves on port 80 |
+| Added `/up` health route | `bookmarks/urls.py` (next to `health`) | Once requires `GET /up → 200` |
+| Changed default port 9090 → 80 | `bootstrap.sh` line 5 | Once serves on port 80 |
+| Changed `EXPOSE` 9090 → 80 | `docker/alpine.Dockerfile` | Once serves on port 80 |
 | Changed healthcheck to use `/up` | `docker/alpine.Dockerfile` HEALTHCHECK | Matches our `/up` route |
 | Added `docker-compose.once.yml` | repo root | Once deployment config (mounts `/storage`) |
 | Added `.github/workflows/docker.yml` | `.github/workflows/` | CI: builds and pushes to `ghcr.io/tkrag/mypinboard:latest` |
+| Added `CLAUDE.md` | repo root | This file |
+
+To see the exact diff at any time: `git diff v1.47.0 HEAD` (after `git fetch upstream --tags`).
 
 ---
 
@@ -28,7 +31,7 @@ All our modifications are small and confined to specific locations. Knowing exac
 make init              # uv sync, npm install, migrations, create data/
 uv run manage.py createsuperuser
 make serve             # Django dev server
-make frontend          # Rollup watch (separate terminal)
+make frontend          # frontend watch (separate terminal)
 make tasks             # Huey task queue (separate terminal)
 
 make test              # pytest -n auto
@@ -43,104 +46,72 @@ Push to `main` → GitHub Actions builds and pushes `ghcr.io/tkrag/mypinboard:la
 
 ---
 
-## Merging upstream linkding updates
+## Updating to a newer linkding release
 
-Only merge upstream when there is a **security fix** or a feature you actually want. Cosmetic releases and minor patches are not worth the merge risk.
+Only update when there is a **security fix** or a feature you actually want.
+
+**Important:** this repo does **not** share git history with upstream (the original fork was a squashed snapshot), so `git merge upstream/...` does not work. Instead, we take the new upstream tag's file tree as-is and re-apply our small set of changes on top. Upstream's default branch is `master`.
 
 ### Step 1 — Check what's new
 
-Go to https://github.com/sissbruecker/linkding/releases. Compare the latest version against our fork base (**v1.45.0**). Read the changelog for:
-- Security vulnerabilities → merge immediately
-- Breaking changes → read carefully before merging
-- New features → optional, merge if useful
+Read https://github.com/sissbruecker/linkding/releases since our base version (see top of file). Look for security fixes and breaking changes. Check whether any new files appear in `bookmarks/migrations/` — those run automatically on container start.
 
-### Step 2 — Add the upstream remote (one time only)
+### Step 2 — Fetch upstream
 
 ```bash
-git remote add upstream https://github.com/sissbruecker/linkding.git
-git fetch upstream
+git remote add upstream https://github.com/sissbruecker/linkding.git   # one time only
+git fetch upstream --tags
 ```
 
-Confirm the remote exists with `git remote -v`.
+### Step 3 — Build the update branch
 
-### Step 3 — Create a merge branch
+Replace `vOLD` with the base version at the top of this file and `vNEW` with the target tag.
 
 ```bash
-git checkout -b merge/linkding-vX.Y.Z
+git diff vOLD HEAD -- bookmarks/urls.py bootstrap.sh docker/alpine.Dockerfile > /tmp/once.patch
+git checkout -b update/linkding-vNEW
+git read-tree -u --reset vNEW          # working tree becomes exactly upstream vNEW
+git checkout main -- docker-compose.once.yml .github/workflows/docker.yml CLAUDE.md
+git apply --3way /tmp/once.patch       # re-apply our port/healthcheck/route edits
+git diff --cached --stat vNEW          # must list only the files in the table above
 ```
 
-Never merge directly to `main`.
+If `git apply --3way` reports conflicts, resolve them keeping: `LD_SERVER_PORT` default `80` in `bootstrap.sh`; `EXPOSE 80` and the `/up` HEALTHCHECK in the Dockerfile; the `path("up", ...)` line in `bookmarks/urls.py`.
 
-### Step 4 — Merge upstream
+Note: Nextcloud sync can strip executable bits from the working copy. Before committing, check `git ls-files -s bootstrap.sh` shows `100755`.
 
-```bash
-git fetch upstream
-git merge upstream/main --no-ff -m "Merge linkding vX.Y.Z"
-```
-
-### Step 5 — Resolve conflicts
-
-Conflicts are most likely in these files — here is how to resolve each:
-
-**`bootstrap.sh`**
-- Keep `LD_SERVER_PORT="${LD_SERVER_PORT:-80}"` (our change)
-- Accept all other upstream changes
-
-**`docker/alpine.Dockerfile`**
-- Keep `EXPOSE 80`
-- Keep the HEALTHCHECK using `${LD_SERVER_PORT:-80}` and `/up`
-- Accept all other upstream changes
-
-**`bookmarks/urls.py`**
-- Keep `path("up", health_view, name="health.up"),` — do not remove this line
-- Accept all other upstream routing changes
-
-**`docker-compose.once.yml`** — upstream won't touch this; no conflict expected.
-
-**`.github/workflows/docker.yml`** — upstream won't touch this; no conflict expected.
-
-After resolving, mark files resolved:
-```bash
-git add bootstrap.sh docker/alpine.Dockerfile bookmarks/urls.py
-git merge --continue
-```
-
-### Step 6 — Run migrations
-
-Upstream may add new migrations. Apply them:
-```bash
-uv run manage.py migrate
-```
-
-Check for any new migration files — if the migration history has changed, make sure `uv.lock` / dependencies are up to date too.
-
-### Step 7 — Verify the build
+### Step 4 — Verify
 
 ```bash
+uv sync && npm install
 make test
+uv run manage.py makemigrations --check --dry-run   # must say "No changes detected"
+```
+
+If Docker is available:
+```bash
 docker build -f docker/alpine.Dockerfile -t mypinboard:test .
 docker run --rm -p 8080:80 mypinboard:test
 curl http://localhost:8080/up   # must return 200
-curl http://localhost:8080/health
 ```
 
-### Step 8 — Merge to main and deploy
+### Step 5 — Back up, merge to main and deploy
 
-```bash
-git checkout main
-git merge --no-ff merge/linkding-vX.Y.Z
-git push origin main
-```
-
-GitHub Actions will build and push the new image. Wait for CI green, then in the Once TUI pull the latest image.
-
-Update the forked-from version in this file: `**Forked from:** linkding vX.Y.Z`.
+1. **Back up `/storage` on the server first** (it holds the SQLite DB, assets and favicons). Database migrations are one-way; the backup is the rollback path.
+2. Merge and push:
+   ```bash
+   git checkout main
+   git merge --ff-only update/linkding-vNEW
+   git push origin main
+   ```
+3. Wait for CI green, then pull the latest image in the Once TUI. Check `/up` and that bookmarks are present.
+4. Update the **Based on** version at the top of this file.
 
 ---
 
 ## What NOT to do
 
-- Do not `git rebase` onto upstream — we have a small number of local commits and rebasing is fragile across large upstream histories
-- Do not merge upstream minor releases just because they exist — only merge security fixes and wanted features
+- Do not try to `git merge` or `git rebase` onto upstream — there is no shared history
+- Do not update just because a release exists — only for security fixes and wanted features
 - Do not change the default port back to 9090 — Once requires port 80
 - Do not remove the `/up` route — Once health-checks on that path

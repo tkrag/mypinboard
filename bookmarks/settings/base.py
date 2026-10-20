@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "bookmarks.middlewares.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -113,6 +114,14 @@ LOGIN_URL = "/" + LD_CONTEXT_PATH + "login"
 LOGIN_REDIRECT_URL = "/" + LD_CONTEXT_PATH + "bookmarks"
 LOGOUT_REDIRECT_URL = "/" + LD_CONTEXT_PATH + "login"
 
+CSRF_COOKIE_PATH = "/" + LD_CONTEXT_PATH
+LANGUAGE_COOKIE_PATH = "/" + LD_CONTEXT_PATH
+SESSION_COOKIE_PATH = "/" + LD_CONTEXT_PATH
+
+CSRF_COOKIE_NAME = "ld_csrftoken"
+LANGUAGE_COOKIE_NAME = "ld_language"
+SESSION_COOKIE_NAME = "ld_sessionid"
+
 # Internationalization
 # https://docs.djangoproject.com/en/2.2/topics/i18n/
 
@@ -151,6 +160,12 @@ LD_DISABLE_URL_VALIDATION = os.getenv("LD_DISABLE_URL_VALIDATION", False) in (
     "1",
 )
 
+# Hosts that server-side requests may connect to even though they resolve to
+# non-public addresses (SSRF protection). Comma-separated list of hostnames,
+# IP addresses and CIDR ranges, or * to allow all hosts.
+# Parsed by bookmarks.services.http_client
+LD_ALLOWED_INTERNAL_HOSTS = os.getenv("LD_ALLOWED_INTERNAL_HOSTS", "")
+
 # Background task enabled setting
 LD_DISABLE_BACKGROUND_TASKS = os.getenv("LD_DISABLE_BACKGROUND_TASKS", False) in (
     True,
@@ -179,6 +194,9 @@ HUEY = {
         "health_check_interval": 10,
     },
 }
+
+# Allow override of the session cookie length, provided in seconds.
+SESSION_COOKIE_AGE = int(os.getenv("LD_SESSION_COOKIE_AGE", 1209600))  # 2 weeks
 
 # Disable login form if configured
 LD_DISABLE_LOGIN_FORM = os.getenv("LD_DISABLE_LOGIN_FORM", False) in (
@@ -235,6 +253,9 @@ if LD_ENABLE_AUTH_PROXY:
 trusted_origins = os.getenv("LD_CSRF_TRUSTED_ORIGINS", "")
 if trusted_origins:
     CSRF_TRUSTED_ORIGINS = trusted_origins.split(",")
+
+# CORS allowed origins for the API, comma-separated
+LD_CORS_ALLOWED_ORIGINS = os.getenv("LD_CORS_ALLOWED_ORIGINS", "")
 
 # Database
 # https://docs.djangoproject.com/en/2.2/ref/settings/#databases

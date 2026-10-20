@@ -2,14 +2,16 @@ import gzip
 import logging
 import os
 import shutil
+from typing import BinaryIO
+from wsgiref.util import FileWrapper
 
-import requests
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
+from django.http import StreamingHttpResponse
 from django.utils import formats, timezone
 
 from bookmarks.models import Bookmark, BookmarkAsset
-from bookmarks.services import singlefile
+from bookmarks.services import http_client, singlefile
 from bookmarks.services.website_loader import (
     detect_content_type,
     fake_request_headers,
@@ -40,6 +42,8 @@ def create_snapshot_asset(bookmark: Bookmark) -> BookmarkAsset:
 def create_snapshot(asset: BookmarkAsset):
     try:
         url = asset.bookmark.url
+        # Raises BlockedAddressError if the URL points to a non-public address,
+        # which prevents creating a snapshot with single-file as well
         content_type = detect_content_type(url)
 
         if is_pdf_content_type(content_type):
@@ -96,7 +100,9 @@ def _create_pdf_snapshot(asset: BookmarkAsset):
     headers = fake_request_headers()
     timeout = 60
 
-    with requests.get(url, headers=headers, stream=True, timeout=timeout) as response:
+    with http_client.get(
+        url, headers=headers, stream=True, timeout=timeout
+    ) as response:
         response.raise_for_status()
 
         # Check Content-Length header if available
@@ -218,6 +224,45 @@ def upload_asset(bookmark: Bookmark, upload_file: UploadedFile):
         raise e
 
 
+# Chunk size used when streaming asset files to clients
+STREAM_CHUNK_SIZE = 64 * 1024
+
+
+def open_asset_file(asset: BookmarkAsset) -> BinaryIO:
+    """
+    Opens the asset file for reading, transparently decompressing gzipped
+    files. Raises FileNotFoundError if the file does not exist.
+    """
+    filepath = os.path.join(settings.LD_ASSET_FOLDER, asset.file)
+
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(filepath)
+
+    if asset.gzip:
+        return gzip.open(filepath, "rb")
+    return open(filepath, "rb")  # noqa: SIM115
+
+
+def stream_asset_file(asset: BookmarkAsset) -> StreamingHttpResponse:
+    """
+    Creates a response that streams the (decompressed) asset file content in
+    fixed-size chunks. Callers can add headers to the response as needed.
+    Raises FileNotFoundError if the file does not exist.
+
+    Notes on why this is implemented this way:
+    - Do not use Django's FileResponse for asset files. Under uWSGI it hands the
+      file descriptor to sendfile(), which sends the raw compressed bytes for
+      gzipped assets while announcing the uncompressed content length.
+    - Do not pass the file object to StreamingHttpResponse directly. Iterating
+      a file yields lines, which loads files without newlines (e.g. binary
+      uploads) into memory as a whole.
+    FileWrapper closes the underlying file when the response is closed.
+    """
+    file = open_asset_file(asset)
+    content = FileWrapper(file, STREAM_CHUNK_SIZE)
+    return StreamingHttpResponse(content, content_type=asset.content_type)
+
+
 def remove_asset(asset: BookmarkAsset):
     # If this asset is the latest_snapshot for a bookmark, try to find the next most recent snapshot
     bookmark = asset.bookmark
@@ -244,7 +289,7 @@ def _generate_asset_filename(
     asset: BookmarkAsset, filename: str, extension: str
 ) -> str:
     def sanitize_char(char):
-        if char.isalnum() or char in ("-", "_", "."):
+        if (char.isascii() and char.isalnum()) or char in ("-", "_", "."):
             return char
         else:
             return "_"

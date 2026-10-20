@@ -17,10 +17,8 @@ DEBUG = True
 
 INTERNAL_IPS = [
     "127.0.0.1",
+    "172.17.0.0",
 ]
-
-# Allow access through ngrok
-CSRF_TRUSTED_ORIGINS = ["https://*.ngrok-free.app"]
 
 STATICFILES_DIRS = [
     # Resolve theme files from style source folder

@@ -67,6 +67,28 @@ Values: `True`, `False` | Default = `False`
 Completely disables URL validation for bookmarks.
 This can be useful if you intend to store non fully qualified domain name URLs, such as network paths, or you want to store URLs that use another protocol than `http` or `https`.
 
+### `LD_ALLOWED_INTERNAL_HOSTS`
+
+Values: `String` | Default = None
+
+By default, linkding refuses to load data from URLs that point to hosts on internal networks, such as the server linkding runs on, other Docker containers, hosts on your local network, or cloud provider metadata services.
+This protects against server-side request forgery (SSRF), where a user of a linkding instance could otherwise use it to access services on the internal network that are not reachable from the outside.
+The protection covers loading website metadata (title, description), preview images and PDF snapshots.
+For HTML snapshots, the bookmark URL and any redirects are checked before the snapshot is created, but the browser process that creates the snapshot is not restricted, so it can still load embedded resources from internal hosts.
+
+If you want to bookmark URLs on your local network and have linkding load metadata for them, you can allow specific hosts with this option.
+The value is a comma-separated list of hostnames, IP addresses, or IP ranges in CIDR notation.
+A hostname starting with a dot allows the domain and all of its subdomains.
+Use `*` to disable the protection completely and allow all hosts.
+
+Examples:
+- `nas.local,192.168.1.20` - allow a specific host by name and another one by IP address
+- `192.168.1.0/24,.home.arpa` - allow a whole IP range and all hosts under a domain
+- `*` - allow all hosts
+
+Blocked requests are logged as warnings.
+Note that configuring an HTTP proxy for linkding through the `HTTP_PROXY` / `HTTPS_PROXY` environment variables circumvents this protection, as all connections are then made to the proxy, which in turn connects to the actual host.
+
 ### `LD_REQUEST_MAX_CONTENT_LENGTH`
 
 Values: `Integer` as bytes | Default = `None`
@@ -116,6 +138,39 @@ For example, for Authelia, which passes the `Remote-User` HTTP header, the `LD_A
 - `LD_AUTH_PROXY_LOGOUT_URL` - The URL that linkding should redirect to after a logout.
 By default, the logout redirects to the login URL, which means the user will be automatically authenticated again.
 Instead, you might want to configure the logout URL of the auth proxy here.
+
+:::note[Using REST API clients]
+
+If you intend to use any API client (e.g. the browser extension, a mobile app, or anything that requires you to configure an API token) you need to bypass the authentication proxy for API requests. These clients can not complete the authentication flow you would use when accessing linkding in the browser and authenticate with an API token instead. You must take care to not over-match your routes when doing this, as API calls are also made in-page by linkding and these should pass through the authentication proxy.
+
+<details>
+
+<summary>Example using Caddy and Authelia</summary>
+
+```
+linkding.example.com {
+  # Requests for /api/* with an API token may skip the authentication proxy.
+  @external_api_call {
+    path /api/*
+    header Authorization *
+  }
+  handle @external_api_call {
+    reverse_proxy linkding:9090
+  }
+
+  # otherwise pass all requests through the authentication proxy.
+  handle {
+    forward_auth authelia:9091 {
+      uri /api/authz/forward-auth
+      copy_headers Remote-User
+    }
+    reverse_proxy linkding:9090
+  }
+}
+```
+
+</details>
+:::
 
 ### `LD_ENABLE_OIDC`
 
@@ -198,6 +253,27 @@ Values: `True`, `False` | Default = `False`
 Disables the login form on the login page.
 This is useful when you want to enforce authentication through OIDC only.
 When enabled, users will not be able to log in using their username and password, and only the "Login with OIDC" button will be shown on the login page.
+
+### `LD_SESSION_COOKIE_AGE`
+
+Values: `Integer` as seconds | Default = `1209600`
+
+Set the lifetime of the session cookie, in seconds. This value determines how long a browser will stay logged in to the web interface. The default value is 2 weeks.
+
+### `LD_CORS_ALLOWED_ORIGINS`
+
+Values: `String` | Default = None
+
+Comma-separated list of origins that are allowed to call the REST API from a browser, for example when running an alternative web frontend on a different domain.
+Setting this option enables CORS headers for the API endpoints (`/api/*`) only. No other part of the application is affected.
+
+For example, to allow a frontend hosted at https://frontend.mydomain.com, configure the setting to `https://frontend.mydomain.com`.
+Note that origins **must** include the correct protocol (`https` or `http`), and **must not** include a path, query string, fragment or user credentials.
+Origins are compared exactly as sent by the browser, so use lowercase and omit default ports (`:80` and `:443`).
+Multiple origins can be specified by separating them with a comma (`,`). Wildcards (`*`) are not supported, each origin must be listed explicitly.
+
+Cross-origin requests must authenticate using an API token in the `Authorization` header.
+If you need more control over CORS headers, configure them in your reverse proxy instead.
 
 ### `LD_CSRF_TRUSTED_ORIGINS`
 
