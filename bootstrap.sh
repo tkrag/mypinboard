@@ -5,13 +5,18 @@ LD_SERVER_HOST="${LD_SERVER_HOST:-[::]}"
 LD_SERVER_PORT="${LD_SERVER_PORT:-80}"
 
 # Once only persists /storage, so keep the data folder there (Once deployment compatibility)
-# rmdir only removes the empty data folder from the image, never existing data
+# The image's data folder is not empty (the build creates tasks.sqlite3), so only a database
+# is worth keeping: move it to /storage if that has none, otherwise set it aside in /storage
 if [ -d /storage ] && [ ! -L data ]; then
-  if rmdir data 2>/dev/null || [ ! -e data ]; then
-    ln -s /storage data
-  else
-    echo "WARNING: /storage exists but data/ is not empty, not linking data to /storage" >&2
+  if [ -e data/db.sqlite3 ] && [ ! -e /storage/db.sqlite3 ]; then
+    echo "Moving existing data/ into /storage" >&2
+    cp -a data/. /storage/ || exit 1
+  elif [ -e data/db.sqlite3 ]; then
+    unlinked="/storage/unlinked-data-$(date +%Y%m%d%H%M%S)"
+    echo "WARNING: data/ and /storage both have a database, keeping /storage and moving data/ to $unlinked" >&2
+    mkdir -p "$unlinked" && cp -a data/. "$unlinked/" || exit 1
   fi
+  rm -rf data && ln -s /storage data
 fi
 
 # Create data folder if it does not exist
